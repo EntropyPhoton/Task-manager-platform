@@ -73,5 +73,71 @@ public class TaskController {
         taskRepository.deleteAllById(ids);
         return ResponseEntity.noContent().build();
     }
+    @PostMapping("/ai-generate")
+    public ResponseEntity<?> aiGenerateTask(@RequestBody Map<String, String> body) {
+
+        String prompt = body.get("prompt");
+        if (prompt == null || prompt.isBlank()) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "prompt 不能为空"));
+        }
+
+        try {
+            // 1. 构建请求，转发给 Python AI 服务
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            HttpEntity<Map<String, String>> request =
+                    new HttpEntity<>(Map.of("prompt", prompt), headers);
+
+            ResponseEntity<Map> aiResponse =
+                    restTemplate.postForEntity(AI_SERVICE_URL, request, Map.class);
+
+            // 2. 检查 Python 服务是否返回了错误
+            Map<?, ?> aiData = aiResponse.getBody();
+            if (aiData == null || aiData.containsKey("error")) {
+                String errMsg = aiData != null ? (String) aiData.get("error") : "AI 服务无响应";
+                return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                        .body(Map.of("error", "AI 服务错误: " + errMsg));
+            }
+
+            // 3. 将 AI 返回数据映射成 Task 实体
+            Task task = new Task();
+            task.setTitle(getString(aiData, "title", prompt.substring(0, Math.min(20, prompt.length()))));
+            task.setDescription(getString(aiData, "description", ""));
+
+            // 解析 priority 枚举（兜底 medium）
+            try {
+                task.setPriority(Task.Priority.valueOf(getString(aiData, "priority", "medium")));
+            } catch (IllegalArgumentException e) {
+                task.setPriority(Task.Priority.medium);
+            }
+
+            // 新任务状态固定为 pending
+            task.setStatus(Task.Status.pending);
+
+            // 解析 tags 列表
+            Object tagsObj = aiData.get("tags");
+            if (tagsObj instanceof List<?> tagList) {
+                task.setTags(tagList.stream()
+                        .filter(t -> t instanceof String)
+                        .map(t -> (String) t)
+                        .toList());
+            }
+
+            // 4. 存库并返回
+            Task saved = taskRepository.save(task);
+            return ResponseEntity.status(HttpStatus.CREATED).body(saved);
+
+        } catch (Exception e) {
+            // Python 服务未启动或网络异常
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(Map.of("error", "无法连接 AI 服务，请确认 Python 服务已在 5001 端口启动。详情: " + e.getMessage()));
+        }
+    }
+
+    private String getString(Map<?, ?> map, String key, String defaultVal) {
+        Object val = map.get(key);
+        return (val instanceof String s && !s.isBlank()) ? s : defaultVal;
+    }
 
 }
