@@ -11,7 +11,12 @@ client = OpenAI(
 )
 MODEL_NAME = AI_MODEL_NAME
 
-
+# 注册任务分解模块
+from task_decomposer import decomposer_bp
+app.register_blueprint(decomposer_bp)
+# 注册智能搜索模块
+from task_searcher import searcher_bp
+app.register_blueprint(searcher_bp)
 SYSTEM_PROMPT = """你是一个任务信息提取专家。用户会用自然语言描述一个待办任务，你需要从中提取结构化的任务信息。
 
 ## 提取规则
