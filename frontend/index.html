@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Intelligent Task Manager Pro</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+</head>
+<body class="bg-gray-100 min-h-screen">
+<div id="app" class="max-w-4xl mx-auto p-6">
+
+    <!-- 顶部标题与新建按钮 -->
+    <header class="flex justify-between items-center mb-8">
+        <div>
+            <h1 class="text-3xl font-bold text-gray-800">智能任务管理系统</h1>
+            <p class="text-gray-500">AI/LLM 开发者笔试 - 终极版</p>
+        </div>
+        <button @click="openCreateModal" class="bg-blue-600 text-white px-6 py-3 rounded-lg shadow-lg hover:bg-blue-700 transition font-bold">
+            + 手动新建
+        </button>
+    </header>
+
+    <!-- ================= AI 魔法输入区 ================= -->
+    <div class="bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 p-[2px] rounded-xl mb-6 shadow-lg">
+        <div class="bg-white p-4 rounded-xl flex items-center gap-3">
+            <span class="text-2xl">✨</span>
+            <input v-model="aiPrompt" @keyup.enter="generateWithAI" :disabled="isAILoading"
+                   class="flex-1 border-none bg-transparent outline-none text-gray-700 placeholder-gray-400"
+                   placeholder="试试对 AI 说：明天下午三点跟老板开会，非常重要，贴上工作标签...">
+            <button @click="generateWithAI" :disabled="isAILoading || !aiPrompt"
+                    class="bg-black text-white px-6 py-2 rounded-lg font-bold hover:bg-gray-800 disabled:bg-gray-300 disabled:cursor-not-allowed transition flex items-center gap-2 whitespace-nowrap">
+                <span v-if="isAILoading" class="animate-spin">⏳</span>
+                {{ isAILoading ? 'AI 思考中...' : '智能生成' }}
+            </button>
+        </div>
+    </div>
+    <!-- ================================================ -->
+
+    <!-- 操作栏：搜索 + 批量操作 -->
+    <div class="bg-white p-4 rounded-xl shadow-sm mb-6 flex flex-col md:flex-row gap-4 items-center">
+        <!-- 搜索框 -->
+        <div class="relative flex-1 w-full">
+            <input v-model="searchQuery" @keyup.enter="fetchTasks"
+                   class="w-full border-2 border-gray-100 p-2 pl-10 rounded-lg focus:border-blue-400 outline-none"
+                   placeholder="输入任务标题或 ID (如 a1b2c3) 检索，按回车确认...">
+            <span class="absolute left-3 top-2.5 text-gray-400">🔍</span>
+        </div>
+
+        <!-- 全选与批量删除 -->
+        <div class="flex items-center gap-4 w-full md:w-auto px-2">
+            <label class="flex items-center gap-2 cursor-pointer text-sm font-bold text-gray-700 whitespace-nowrap">
+                <input type="checkbox" :checked="isAllSelected" @change="toggleSelectAll" class="w-5 h-5 rounded cursor-pointer">
+                全选
+            </label>
+            <button v-if="selectedIds.length > 0" @click="bulkDelete"
+                    class="bg-red-50 text-red-600 px-4 py-2 rounded-lg border border-red-200 hover:bg-red-600 hover:text-white transition text-sm font-bold shadow-sm">
+                删除选中 ({{ selectedIds.length }})
+            </button>
+        </div>
+    </div>
+
+    <!-- 任务列表区 -->
+    <div class="space-y-4">
+        <div v-for="task in tasks" :key="task.id"
+             class="bg-white p-4 rounded-xl shadow-sm border-l-4 flex items-center justify-between hover:shadow-md transition"
+             :class="[priorityClass(task.priority), {'opacity-60': task.status === 'completed'}]">
+
+            <div class="flex items-start gap-4 flex-1">
+                <!-- 多选框 -->
+                <input type="checkbox" :value="task.id" v-model="selectedIds" class="w-5 h-5 mt-1 rounded border-gray-300 cursor-pointer">
+
+                <div class="flex-1">
+                    <!-- 【已修复】标题、优先级、状态的排列 -->
+                    <div class="flex items-center gap-2 flex-wrap">
+
+                        <!-- 展现哈希 ID -->
+                        <span class="text-[10px] font-mono bg-gray-200 text-gray-500 px-1.5 py-0.5 rounded cursor-copy" title="唯一任务ID">
+              #{{ task.id }}
+            </span>
+
+                        <!-- 标题 -->
+                        <h3 :class="{'line-through text-gray-400': task.status === 'completed'}" class="font-bold text-lg">
+                            {{ task.title }}
+                        </h3>
+
+                        <!-- 状态标签 -->
+                        <span class="text-[10px] px-2 py-0.5 rounded border font-bold" :class="statusBadgeClass(task.status)">
+              {{ statusText(task.status) }}
+            </span>
+
+                        <!-- 优先级标签 -->
+                        <span class="text-[10px] px-2 py-0.5 rounded border capitalize font-bold" :class="badgeClass(task.priority)">
+              {{ task.priority }}
+            </span>
+                    </div>
+
+                    <!-- 描述 -->
+                    <p v-if="task.description" class="text-gray-500 text-sm mt-1 line-clamp-1 italic">{{ task.description }}</p>
+
+                    <!-- Tags 标签展示 -->
+                    <div v-if="task.tags && task.tags.length > 0" class="flex gap-1 mt-2 flex-wrap">
+            <span v-for="tag in task.tags" :key="tag" class="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
+              #{{ tag }}
+            </span>
+                    </div>
+
+                    <!-- 时间戳 -->
+                    <div class="text-[10px] text-gray-400 mt-2">
+                        创建于: {{ formatDate(task.created_at || task.createdAt) }}
+                        <span v-if="(task.updated_at || task.updatedAt) !== (task.created_at || task.createdAt)">
+              | 更新于: {{ formatDate(task.updated_at || task.updatedAt) }}
+            </span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右侧操作 -->
+            <div class="flex items-center gap-4 ml-4">
+                <!-- 切换状态快捷键 -->
+                <button v-if="task.status !== 'completed'" @click="updateTaskStatus(task, 'completed')" class="text-xs font-bold text-green-600 hover:bg-green-50 px-2 py-1 rounded">
+                    ✓ 完成
+                </button>
+                <button v-else @click="updateTaskStatus(task, 'pending')" class="text-xs font-bold text-orange-500 hover:bg-orange-50 px-2 py-1 rounded">
+                    ⟲ 重做
+                </button>
+
+                <button @click="openEditModal(task)" class="text-gray-400 hover:text-blue-600" title="编辑"><span class="text-xl">✏️</span></button>
+                <button @click="deleteTask(task.id)" class="text-gray-400 hover:text-red-600" title="删除"><span class="text-xl">🗑️</span></button>
+            </div>
+        </div>
+
+        <!-- 空状态 -->
+        <div v-if="tasks.length === 0" class="text-center py-20 text-gray-400 bg-white rounded-xl border-2 border-dashed">
+            暂无任务，快用 AI 智能生成一个吧！
+        </div>
+    </div>
+
+    <!-- 【弹窗】新建/修改任务 -->
+    <div v-if="modal.show" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div class="p-6 border-b flex justify-between items-center bg-gray-50">
+                <h3 class="text-xl font-bold text-gray-800">{{ modal.isEdit ? '编辑任务' : '创建新任务' }}</h3>
+                <button @click="closeModal" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+            </div>
+
+            <div class="p-6 space-y-4">
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-1">任务名称 *</label>
+                    <input v-model="currentTask.title" class="w-full border-2 border-gray-100 p-3 rounded-xl focus:border-blue-500 outline-none" placeholder="你想做什么？">
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-1">详细描述</label>
+                    <textarea v-model="currentTask.description" rows="3" class="w-full border-2 border-gray-100 p-3 rounded-xl focus:border-blue-500 outline-none" placeholder="添加更多细节..."></textarea>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-bold text-gray-700 mb-1">优先级</label>
+                        <select v-model="currentTask.priority" class="w-full border-2 border-gray-100 p-3 rounded-xl outline-none">
+                            <option value="low">低</option>
+                            <option value="medium">中</option>
+                            <option value="high">高</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-gray-700 mb-1">状态</label>
+                        <select v-model="currentTask.status" class="w-full border-2 border-gray-100 p-3 rounded-xl outline-none">
+                            <option value="pending">待处理</option>
+                            <option value="in_progress">进行中</option>
+                            <option value="completed">已完成</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-1">标签 (用英文逗号隔开)</label>
+                    <input v-model="tempTags" class="w-full border-2 border-gray-100 p-3 rounded-xl focus:border-blue-500 outline-none" placeholder="例如: 工作,学习,重要">
+                </div>
+            </div>
+
+            <div class="p-6 bg-gray-50 border-t flex justify-end gap-3">
+                <button @click="closeModal" class="px-6 py-2 rounded-xl text-gray-600 hover:bg-gray-200 transition font-bold">取消</button>
+                <button @click="handleTaskSubmit" class="px-8 py-2 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 shadow-lg transition">
+                    {{ modal.isEdit ? '保存修改' : '立即创建' }}
+                </button>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+    const { createApp, ref, computed, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const API_URL = 'http://localhost:8080/api/tasks';
+        const tasks = ref([]);
+        const searchQuery = ref('');
+        const selectedIds = ref([]);
+
+        // AI 相关状态
+        const aiPrompt = ref('');
+        const isAILoading = ref(false);
+
+        const modal = ref({ show: false, isEdit: false });
+        const currentTask = ref({});
+        const tempTags = ref('');
+
+        const fetchTasks = async () => {
+          try {
+            const res = await axios.get(`${API_URL}?keyword=${searchQuery.value}`);
+            tasks.value = res.data;
+          } catch (error) {
+            console.error("无法连接后端", error);
+          }
+        };
+
+        // AI 智能生成逻辑
+        const generateWithAI = async () => {
+          if (!aiPrompt.value.trim()) return;
+          isAILoading.value = true;
+          try {
+            await axios.post(`${API_URL}/ai-generate`, { prompt: aiPrompt.value });
+            aiPrompt.value = ''; // 清空输入框
+            fetchTasks(); // 刷新列表
+          } catch (error) {
+            console.error(error);
+            alert("AI 生成失败，请检查后端报错或 API Key 是否配置正确。");
+          } finally {
+            isAILoading.value = false;
+          }
+        };
+
+        const openCreateModal = () => {
+          currentTask.value = { title: '', description: '', priority: 'medium', status: 'pending', tags:[] };
+          tempTags.value = '';
+          modal.value = { show: true, isEdit: false };
+        };
+
+        const openEditModal = (task) => {
+          currentTask.value = JSON.parse(JSON.stringify(task));
+          tempTags.value = currentTask.value.tags ? currentTask.value.tags.join(',') : '';
+          modal.value = { show: true, isEdit: true };
+        };
+
+        const closeModal = () => { modal.value.show = false; };
+
+        const handleTaskSubmit = async () => {
+          if (!currentTask.value.title) return alert("标题不能为空");
+
+          currentTask.value.tags = tempTags.value
+            ? tempTags.value.split(',').map(t => t.trim()).filter(Boolean)
+            :[];
+
+          if (modal.value.isEdit) {
+            await axios.put(`${API_URL}/${currentTask.value.id}`, currentTask.value);
+          } else {
+            await axios.post(API_URL, currentTask.value);
+          }
+          closeModal();
+          fetchTasks();
+        };
+
+        const updateTaskStatus = async (task, newStatus) => {
+          await axios.put(`${API_URL}/${task.id}`, { ...task, status: newStatus });
+          fetchTasks();
+        };
+
+        const deleteTask = async (id) => {
+          if (confirm("确定删除吗？")) {
+            await axios.delete(`${API_URL}/${id}`);
+            fetchTasks();
+          }
+        };
+
+        const isAllSelected = computed(() => {
+          return tasks.value.length > 0 && selectedIds.value.length === tasks.value.length;
+        });
+
+        const toggleSelectAll = () => {
+          if (isAllSelected.value) {
+            selectedIds.value =[];
+          } else {
+            selectedIds.value = tasks.value.map(t => t.id);
+          }
+        };
+
+        const bulkDelete = async () => {
+          if (confirm(`确定删除选中的 ${selectedIds.value.length} 个任务吗？`)) {
+            await axios.post(`${API_URL}/bulk-delete`, selectedIds.value);
+            selectedIds.value =[];
+            fetchTasks();
+          }
+        };
+
+        const priorityClass = (p) => {
+          return { 'border-red-500': p === 'high', 'border-yellow-500': p === 'medium', 'border-blue-500': p === 'low' };
+        };
+
+        const badgeClass = (p) => {
+          if (p === 'high') return 'bg-red-50 text-red-600 border-red-200';
+          if (p === 'medium') return 'bg-yellow-50 text-yellow-600 border-yellow-200';
+          return 'bg-blue-50 text-blue-600 border-blue-200';
+        };
+
+        const statusText = (s) => {
+          if (s === 'completed') return '已完成';
+          if (s === 'in_progress') return '进行中';
+          return '待处理';
+        };
+
+        const statusBadgeClass = (s) => {
+          if (s === 'completed') return 'bg-green-50 text-green-600 border-green-200';
+          if (s === 'in_progress') return 'bg-blue-50 text-blue-600 border-blue-200';
+          return 'bg-gray-50 text-gray-600 border-gray-200';
+        };
+
+        const formatDate = (dateVal) => {
+          if (!dateVal) return '-';
+          if (Array.isArray(dateVal)) {
+            return `${dateVal[0]}-${String(dateVal[1]).padStart(2,'0')}-${String(dateVal[2]).padStart(2,'0')} ${String(dateVal[3]||0).padStart(2,'0')}:${String(dateVal[4]||0).padStart(2,'0')}`;
+          }
+          return new Date(dateVal).toLocaleString();
+        };
+
+        onMounted(fetchTasks);
+
+        return {
+          tasks, searchQuery, selectedIds, modal, currentTask, tempTags, isAllSelected,
+          aiPrompt, isAILoading, generateWithAI,  // AI 相关
+          fetchTasks, openCreateModal, openEditModal, closeModal, handleTaskSubmit,
+          updateTaskStatus, deleteTask, toggleSelectAll, bulkDelete,
+          priorityClass, badgeClass, statusText, statusBadgeClass, formatDate
+        };
+      }
+    }).mount('#app')
+</script>
+</body>
+</html>
